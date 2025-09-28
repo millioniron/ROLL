@@ -37,6 +37,7 @@ Leveraging a multi-role distributed architecture with Ray for flexible resource 
 
 | 📣   Updates                                                                                                                                                                                                                                                                                                                            |
 |:----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| **[09/28/2025]** 🎉 Ascend NPU support — see [usage guide](https://alibaba.github.io/ROLL/docs/English/UserGuide/ascend/ascend_usage).                                                                                                                                                                                          |
 | **[09/24/2025]** 🎉 Support [Wan2_2 Reward FL pipeline](examples/wan2.2-14B-reward_fl_ds/reward_fl_config.yaml). Explore the new capabilities!                                                                                                                                                                                          |
 | **[09/23/2025]** 🎉 ROLL aligns with GEM environment definition, providing agentic Tool Use training capabilities, [ToolUse docs](docs_roll/docs/English/UserGuide/agentic/Tool_Use.md).                                                                                                                                                |
 | **[09/16/2025]** 🎉 Qwen3-Next model training is supported, refer to [configuration](examples/qwen3-next-80BA3B-rlvr_megatron/rlvr_config.yaml).                                                                                                                                                                                        |
@@ -105,6 +106,8 @@ Leveraging a multi-role distributed architecture with Ray for flexible resource 
 [Resource Config](https://alibaba.github.io/ROLL/docs/English/UserGuide/device_mapping)   
 [GPU Time-Division Multiplexing Control](https://alibaba.github.io/ROLL/docs/English/UserGuide/offload_reload_control)  
 
+#### ROLL x Ascend
+[Ascend Usage Guide](https://alibaba.github.io/ROLL/docs/English/UserGuide/ascend/ascend_usage)
 
 ---
 
