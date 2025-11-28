@@ -295,7 +295,6 @@ class TensorBucket:
     @staticmethod
     def pop_tensor_in_buffer(named_tensors: Dict[str, "torch.Tensor"], tensors_meta, buffer: "torch.Tensor"):
         for name, meta in tensors_meta.items():
-            meta = tensors_meta[name]
             bucket_start, tensor_start, save_bytes = meta["bucket_start"], meta["tensor_start"], meta["save_bytes"]
             tensor = named_tensors.get(name, None)
             if tensor is None:
