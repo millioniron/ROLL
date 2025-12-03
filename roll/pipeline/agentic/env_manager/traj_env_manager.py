@@ -11,7 +11,7 @@ from codetiming import Timer
 from omegaconf import DictConfig
 from tensordict import TensorDict
 from transformers import PreTrainedTokenizer
-
+import json
 from roll.pipeline.agentic.llm_proxy import create_llm_proxy, BaseLLMProxy
 from roll.pipeline.agentic.env_manager.base_env_manager import RolloutCache, BaseEnvManager
 from roll.utils.env_action_limiter import get_global_limiter
@@ -179,6 +179,7 @@ class TrajEnvManager(BaseEnvManager):
                 self.rollout_cache.truncated = True
         self.rollout_cache.history[-1]['reward'] = reward
         self.rollout_cache.history[-1]['llm_response'] = responses[0]
+        self.rollout_cache.history[-1]['infer_logprobs'] = llm_output.batch['infer_logprobs']
         if info is not None:
             self.rollout_cache.history[-1].update(info)
 
@@ -293,13 +294,16 @@ class TrajEnvManager(BaseEnvManager):
         token_ids = []
         prompt_masks = []
         response_masks = []
+        infer_logprobs = []
         for items in self.rollout_cache.history:
             token_ids.extend(items["prompt_ids"])
             token_ids.extend(items["response_ids"])
             prompt_masks.extend([1] * len(items["prompt_ids"]) + [0] * len(items["response_ids"]))
             response_masks.extend([0] * len(items["prompt_ids"]) + [1] * len(items["response_ids"]))
-
+            infer_logprobs.extend(items["infer_logprobs"].flatten().tolist())
+            
         input_ids =torch.tensor(token_ids, dtype=torch.long).unsqueeze(0)
+        infer_logprobs = torch.tensor(infer_logprobs, dtype=torch.float).unsqueeze(0)
         attention_mask = torch.tensor([1] * len(token_ids), dtype=torch.long).unsqueeze(0)
         response_mask = torch.tensor(response_masks, dtype=torch.bool).unsqueeze(0)
 
@@ -316,6 +320,7 @@ class TrajEnvManager(BaseEnvManager):
                 "input_ids": input_ids,
                 "attention_mask": attention_mask,
                 "position_ids": position_ids,
+                "infer_logprobs": infer_logprobs,
             },
             batch_size=input_ids.shape[0])
 
@@ -323,6 +328,7 @@ class TrajEnvManager(BaseEnvManager):
 
         # TODO: move pad to pipeline
         input_ids = pad_to_length(input_ids, length=self.pipeline_config.sequence_length, pad_value=self.tokenizer.pad_token_id)
+        infer_logprobs = pad_to_length(infer_logprobs, length=self.pipeline_config.sequence_length, pad_value=0)
         attention_mask = pad_to_length(attention_mask, length=self.pipeline_config.sequence_length, pad_value=0)
         position_ids = pad_to_length(position_ids, length=self.pipeline_config.sequence_length, pad_value=0)
         response_mask = pad_to_length(response_mask, length=self.pipeline_config.sequence_length, pad_value=0)
@@ -336,6 +342,7 @@ class TrajEnvManager(BaseEnvManager):
             "response_mask": response_mask,
             "prompt_mask": prompt_mask,
             "scores": score_tensor,
+            "infer_logprobs": infer_logprobs,
         })
         lm_input.non_tensor_batch.update({
             "env_ids": np.array([self.rollout_cache.env_id], dtype=object),

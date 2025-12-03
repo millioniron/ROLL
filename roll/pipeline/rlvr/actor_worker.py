@@ -19,9 +19,8 @@ class ActorWorker(BaseActorWorker):
 
         ref_log_probs = data.batch["ref_log_probs"]
         old_log_probs = data.batch["old_log_probs"]
-        infer_log_probs = data.batch.get("infer_logprobs", old_log_probs)
-        infer_log_probs = infer_log_probs if len(infer_log_probs) > 0 else old_log_probs
-        
+        infer_log_probs = data.batch.get("infer_logprobs", None)
+
         advantages = data.batch["advantages"]
 
         log_probs = self.strategy.op_compute_log_probs(
@@ -57,8 +56,6 @@ class ActorWorker(BaseActorWorker):
 
         if self.pipeline_config.importance_sampling == "token":
             ratio = (log_probs - old_log_probs).exp()
-            train_infer_ratio = (log_probs - infer_log_probs).exp()
-            train_infer_diff = log_probs.exp() - infer_log_probs.exp()
         elif self.pipeline_config.importance_sampling == "seq":
             log_ratio = log_probs - old_log_probs
             masked_log_ratio = masked_mean(log_ratio, final_response_mask, dim=-1)
@@ -73,7 +70,13 @@ class ActorWorker(BaseActorWorker):
         if self.pipeline_config.dual_clip_loss:
             dual_clip_loss = -torch.max(-loss, (1 + self.pipeline_config.pg_clip * 2) * advantages)
             loss = torch.where(advantages < 0, dual_clip_loss, loss)
-
+        
+        if infer_log_probs is not None and self.pipeline_config.infer_correction:
+            loss, infer_response_mask, infer_stats=self.infer_correction(
+                old_log_probs=old_log_probs, infer_log_probs=infer_log_probs,
+                response_mask=response_mask,pg_loss=loss)
+            final_response_mask = (final_response_mask.bool() & infer_response_mask).long()
+            
         weighted_pg_loss = agg_loss(loss_mat=loss, loss_mask=final_response_mask,
                                     loss_agg_mode=self.pipeline_config.loss_agg_mode,
                                     weights=sample_weights, loss_scale=loss_scale)
@@ -121,11 +124,6 @@ class ActorWorker(BaseActorWorker):
             total_loss = total_loss + topr_neg_loss * self.pipeline_config.use_topr_neg_loss_coef
             metrics['actor/topr_neg_loss'] = topr_neg_loss.detach().item()
 
-        train_infer_prob_metric = {
-            "actor/train_infer_ratio_mean": masked_mean(train_infer_ratio, response_mask, dim=-1).mean().detach().item(),
-            "actor/train_infer_diff_mean": masked_mean(train_infer_diff, response_mask, dim=-1).mean().detach().item(),
-        }
-        
         loss_metric = {
             "actor/ppo_ratio_high_clipfrac": clipped_high.mean().detach().item(),
             "actor/ppo_ratio_low_clipfrac": clipped_low.mean().detach().item(),
@@ -154,9 +152,8 @@ class ActorWorker(BaseActorWorker):
             "actor/sample_weights_max": sample_weights.max().detach().item(),
             **metrics,
             **loss_metric,
-            **train_infer_prob_metric
         }
-
+        pg_metrics.update(infer_stats)
         return total_loss, pg_metrics
 
     def compute_sample_weights(self, data: DataProto, response_mask: torch.Tensor):

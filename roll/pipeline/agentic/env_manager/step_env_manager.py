@@ -85,6 +85,7 @@ class StepEnvManager(TrajEnvManager):
             prompt_mask = torch.tensor(prompt_masks, dtype=torch.bool).unsqueeze(0)
             score_tensor = torch.tensor([0] * len(token_ids), dtype=torch.float).unsqueeze(0)
             score_tensor[0][-1] = history['reward']
+            infer_logprobs = history["infer_logprobs"].flatten().unsqueeze(0)
             position_ids = attention_mask.cumsum(dim=-1)
 
             input_ids = pad_to_length(input_ids, length=self.pipeline_config.sequence_length, pad_value=self.tokenizer.pad_token_id)
@@ -93,7 +94,7 @@ class StepEnvManager(TrajEnvManager):
             response_mask = pad_to_length(response_mask, length=self.pipeline_config.sequence_length, pad_value=0)
             prompt_mask = pad_to_length(prompt_mask, length=self.pipeline_config.sequence_length, pad_value=0)
             score_tensor = pad_to_length(score_tensor, length=self.pipeline_config.sequence_length, pad_value=0)
-
+            infer_logprobs = pad_to_length(infer_logprobs, length=self.pipeline_config.sequence_length, pad_value=0)
             samples.append(DataProto(
                 batch=TensorDict(
                     {
@@ -103,6 +104,7 @@ class StepEnvManager(TrajEnvManager):
                         "response_mask": response_mask,
                         "prompt_mask": prompt_mask,
                         "scores": score_tensor,
+                        "infer_logprobs": infer_logprobs,
                     },
                     batch_size=input_ids.shape[0]),
                 non_tensor_batch={
