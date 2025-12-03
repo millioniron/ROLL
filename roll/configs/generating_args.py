@@ -58,6 +58,10 @@ class GeneratingArguments:
         default=None,
         metadata={"help": "Whether to include the stop strings in output text."},
     )
+    logprobs: Optional[int] = field(
+        default=None,
+        metadata={"help": "Whether return infer log-prob."},
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         args = asdict(self)

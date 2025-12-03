@@ -395,12 +395,68 @@ class PPOConfig(BaseConfig):
         field(default="seq-mean-token-mean", metadata={"help": "Loss aggregation mode"})
     )
     dual_clip_loss: bool = field(default=False, metadata={"help": "Use dual clip loss"})
+    
     enable_reference: bool = field(
         default=False, metadata={"help": "Whether to enable reference cluster for computing ref_log_probs."}
     )
     enable_old_logprobs_recompute: bool = field(default=False, metadata={"help": "Enable old_logprobs computation optimization for disable caching"})
     force_disable_old_logprobs_recompute: bool = field(default=False, metadata={"help": "Force disable old_logprobs computation optimization for disable caching, priority is higher than enable_old_logprobs_recompute"})
 
+    # trainer&rollout mismatch
+    infer_correction: bool = field(
+        default=False,
+        metadata={"help": "Whether to apply importance sampling correction during inference."}
+    )
+    infer_is_mode: Literal["token", "sequence", "none"] = field(
+        default="token",
+        metadata={"help": "IS weighting mode: 'token' (per-token ratio), 'sequence' (per-sequence ratio), 'none' (no IS weighting)."}
+    )
+    # Clipping thresholds (used in IS weighting)
+    infer_is_threshold_min: float = field(
+        default=0.0,
+        metadata={"help": "Minimum threshold for IS weight clipping. Recommended 0.0 for unbiased estimation."}
+    )
+    infer_is_threshold_max: float = field(
+        default=2.0,
+        metadata={"help": "Maximum threshold for IS weight clipping."}
+    )
+    # Token-level rejection
+    enable_token_reject: bool = field(
+        default=False,
+        metadata={"help": "Enable token-level rejection based on IS ratio thresholds."}
+    )
+    infer_token_mask_threshold_min: float = field(
+        default=0.0,
+        metadata={"help": "Minimum IS ratio threshold for token rejection."}
+    )
+    infer_token_mask_threshold_max: float = field(
+        default=2.0,
+        metadata={"help": "Maximum IS ratio threshold for token rejection."}
+    )
+    # Catastrophic rejection (reject entire sequence if any token ratio is too small)
+    enable_catastrophic_reject: bool = field(
+        default=False,
+        metadata={"help": "Enable catastrophic rejection: reject entire sequence if any valid token has IS ratio below threshold."}
+    )
+    infer_catastrophic_threshold: float = field(
+        default=1e-4,
+        metadata={"help": "Threshold below which a token triggers catastrophic rejection of its sequence."}
+    )
+    # Sequence-level rejection
+    enable_seq_reject: Optional[Literal["sequence", "geometric",'None']] = field(
+        default=None,
+        metadata={"help": "Enable sequence-level rejection: 'sequence' uses sum of log-ratios, 'geometric' uses mean. None disables."}
+    )
+    infer_seq_mask_threshold_min: float = field(
+        default=0.1,
+        metadata={"help": "Minimum IS ratio threshold for sequence rejection."}
+    )
+    infer_seq_mask_threshold_max: float = field(
+        default=10.0,
+        metadata={"help": "Maximum IS ratio threshold for sequence rejection (typically larger than token-level)."}
+    )
+    
+    
     def __post_init__(self):
         super().__post_init__()
 

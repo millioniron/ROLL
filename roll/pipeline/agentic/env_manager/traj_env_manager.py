@@ -11,7 +11,7 @@ from codetiming import Timer
 from omegaconf import DictConfig
 from tensordict import TensorDict
 from transformers import PreTrainedTokenizer
-
+import json
 from roll.pipeline.agentic.llm_proxy import create_llm_proxy, BaseLLMProxy
 from roll.pipeline.agentic.env_manager.base_env_manager import RolloutCache, BaseEnvManager
 from roll.utils.env_action_limiter import get_global_limiter
@@ -308,6 +308,7 @@ class TrajEnvManager(BaseEnvManager):
                 infer_logprobs.extend([0] * len(items["prompt_ids"]) + items["infer_logprobs"])
 
         input_ids =torch.tensor(token_ids, dtype=torch.long).unsqueeze(0)
+        infer_logprobs = torch.tensor(infer_logprobs, dtype=torch.float).unsqueeze(0)
         attention_mask = torch.tensor([1] * len(token_ids), dtype=torch.long).unsqueeze(0)
         response_mask = torch.tensor(response_masks, dtype=torch.bool).unsqueeze(0)
 

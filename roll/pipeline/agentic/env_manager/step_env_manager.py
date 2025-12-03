@@ -105,6 +105,7 @@ class StepEnvManager(TrajEnvManager):
                         "response_mask": response_mask,
                         "prompt_mask": prompt_mask,
                         "scores": score_tensor,
+                        "infer_logprobs": infer_logprobs,
                     },
                     batch_size=input_ids.shape[0]),
                 non_tensor_batch={
