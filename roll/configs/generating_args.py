@@ -59,7 +59,7 @@ class GeneratingArguments:
         metadata={"help": "Whether to include the stop strings in output text."},
     )
     logprobs: Optional[int] = field(
-        default=None,
+        default=0,
         metadata={"help": "Whether return infer log-prob."},
     )
 

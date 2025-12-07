@@ -25,9 +25,10 @@ from roll.utils.functionals import (
     postprocess_generate,
     GenerateRequestType,
     agg_loss,
-    masked_sum
+    masked_sum,
 )
 from roll.utils.offload_states import OffloadStateType
+from roll.utils.infer_correction import InferCorrectionHandler  
 from roll.utils.dynamic_batching import make_mini_batch_iter_for_dynamic_batching
 from roll.platforms import current_platform
 
@@ -266,11 +267,11 @@ class ActorWorker(Worker):
 
         response_mask = data.batch["response_mask"][:, 1:].long()
         final_response_mask = data.batch.get("final_response_mask", response_mask)
+        
         ref_log_probs = data.batch["ref_log_probs"]
         old_log_probs = data.batch["old_log_probs"]
         advantages = data.batch["advantages"]
         infer_log_probs = data.batch.get("infer_logprobs", None)
-
         log_probs = self.strategy.op_compute_log_probs(
             logits=output_tensor, input_ids=data.batch["input_ids"], attention_mask=data.batch["response_mask"]
         )
@@ -285,18 +286,25 @@ class ActorWorker(Worker):
         if self.pipeline_config.dual_clip_loss:
             dual_clip_loss = -torch.max(-pg_loss, (1 + self.pipeline_config.pg_clip * 2) * advantages)
             pg_loss = torch.where(advantages < 0, dual_clip_loss, pg_loss)
-            
+
+        infer_stats = {}
         if infer_log_probs is not None and self.pipeline_config.infer_correction:
-            pg_loss, infer_response_mask, infer_stats=self.infer_correction(
-                old_log_probs=old_log_probs, infer_log_probs=infer_log_probs,
-                response_mask=response_mask,pg_loss=pg_loss)
+            correction_handler = InferCorrectionHandler(self.pipeline_config)
+            
+            pg_loss, infer_response_mask, infer_stats = correction_handler(
+                old_log_probs=old_log_probs,
+                infer_log_probs=infer_log_probs,
+                response_mask=response_mask,
+                pg_loss=pg_loss
+            )
+            # 更新最终掩码
             final_response_mask = (final_response_mask.bool() & infer_response_mask).long()
         
         pg_loss = agg_loss(loss_mat=pg_loss, loss_mask=final_response_mask, loss_agg_mode=self.pipeline_config.loss_agg_mode)
+
         kl_loss = compute_approx_kl(log_probs=log_probs, log_probs_base=ref_log_probs, action_mask=final_response_mask,
-
+                                    kl_penalty="k3")
         kl_loss = agg_loss(loss_mat=kl_loss, loss_mask=final_response_mask, loss_agg_mode=self.pipeline_config.loss_agg_mode)
-
 
         approxkl = compute_approx_kl(
             log_probs=log_probs, log_probs_base=old_log_probs, action_mask=response_mask, kl_penalty="mse"
@@ -341,150 +349,7 @@ class ActorWorker(Worker):
         pg_metrics.update(infer_stats)
 
         return total_loss, pg_metrics
-        
-        
-    def infer_correction(
-        self,
-        old_log_probs: torch.Tensor,
-        infer_log_probs: torch.Tensor,
-        response_mask: torch.Tensor,
-        pg_loss: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, dict]:
-        """
-        处理 importance sampling ratio,支持 IS 裁剪与多种 reject 策略。
-        返回更新后的 pg_loss、mask 和详细统计信息。
-        """
-        # Step 0: Shape alignment
-        if infer_log_probs.shape[1] == old_log_probs.shape[1]+1:
-            infer_log_probs = infer_log_probs[:, 1:]  # align with response_mask[:, 1:]
-        assert old_log_probs.shape == infer_log_probs.shape == response_mask.shape, \
-            f"Shape mismatch: {old_log_probs.shape}, {infer_log_probs.shape}, {response_mask.shape}"
-        # Step 1: Compute log-ratio and ratio
-        log_ratio = old_log_probs - infer_log_probs  # [B, T]
-        ratio = torch.exp(log_ratio)  # [B, T]
-        # Step 2: Apply IS weighting strategy (optional)
-        if self.pipeline_config.infer_is_mode == "token":
-            raw_is_weight = ratio
-        elif self.pipeline_config.infer_is_mode == "sequence":
-            log_ratio_sum = masked_sum(log_ratio, response_mask, dim=-1).unsqueeze(-1) # [B, 1]
-            raw_is_weight = torch.exp(log_ratio_sum).expand_as(ratio)  # [B, T]
-        elif self.pipeline_config.infer_is_mode in (None, "none", ""):
-            raw_is_weight = torch.ones_like(ratio)
-        else:
-            raw_is_weight = torch.ones_like(ratio)
-        # Clamp to get final is_weight (used for loss)
-        is_weight = raw_is_weight.clamp(
-            min=self.pipeline_config.infer_is_threshold_min,
-            max=self.pipeline_config.infer_is_threshold_max
-        ).detach()
-        # Step 3: Build rejection mask
-        original_valid = response_mask > 0.5  # [B, T], bool
-        keep_mask = original_valid.clone()
-        # (a) Token-level ratio reject
-        if getattr(self.pipeline_config, 'enable_token_reject', False):
-            ratio_too_high = ratio > self.pipeline_config.infer_token_mask_threshold_max
-            ratio_too_low = ratio < self.pipeline_config.infer_token_mask_threshold_min
-            token_reject = ratio_too_high | ratio_too_low
-            keep_mask = keep_mask & (~token_reject)
-        # (b) Catastrophic reject
-        if getattr(self.pipeline_config, 'enable_catastrophic_reject', False):
-            catastrophic = (ratio < self.pipeline_config.infer_catastrophic_threshold) & original_valid
-            has_catastrophic = catastrophic.any(dim=-1, keepdim=True)
-            keep_mask = keep_mask & (~has_catastrophic)
-        # (c) Sequence-level reject
-        if getattr(self.pipeline_config, 'enable_seq_reject', False):
-            if self.pipeline_config.enable_seq_reject=="sequence":
-                log_ratio_sum = masked_sum(log_ratio, response_mask, dim=-1)  # [B]
-                seq_ratio = torch.exp(log_ratio_sum)  # [B]
-                seq_too_high = seq_ratio > self.pipeline_config.infer_seq_mask_threshold_max
-                seq_too_low = seq_ratio < self.pipeline_config.infer_seq_mask_threshold_min
-                seq_reject = (seq_too_high | seq_too_low).unsqueeze(-1)
-                keep_mask = keep_mask & (~seq_reject)
-            elif self.pipeline_config.enable_seq_reject=="geometric":
-                log_ratio_mean = masked_mean(log_ratio, response_mask, dim=-1)  # [B]
-                seq_ratio = torch.exp(log_ratio_mean)  # [B]
-                seq_too_high = seq_ratio > self.pipeline_config.infer_seq_mask_threshold_max
-                seq_too_low = seq_ratio < self.pipeline_config.infer_seq_mask_threshold_min
-                seq_reject = (seq_too_high | seq_too_low).unsqueeze(-1)
-                keep_mask = keep_mask & (~seq_reject)
-        # final_mask = keep_mask.float()
-        final_mask = keep_mask
-        # Step 4: Reweight policy loss
-        pg_loss = pg_loss * is_weight
-        # Step 5: Compute detailed stats over original_valid tokens
-        # Rejected mask
-        rejected_mask = original_valid & (~keep_mask)  # [B, T]
-        # Clipped mask: only meaningful if IS weighting is active
-        if self.pipeline_config.infer_is_mode in ("token", "sequence"):
-            clipped_low = (raw_is_weight <= self.pipeline_config.infer_is_threshold_min) & original_valid
-            clipped_high = (raw_is_weight >= self.pipeline_config.infer_is_threshold_max) & original_valid
-            clipped_mask = clipped_low | clipped_high  # [B, T]
-        else:
-            clipped_mask = torch.zeros_like(original_valid)  # no clipping
-        # Compute fractions
-        def _compute_frac(mask_tensor):
-            return agg_loss(
-                loss_mat=mask_tensor.float(),
-                loss_mask=response_mask,
-                loss_agg_mode="token-mean"  # force token-wise average
-            ).detach().item()
-        clip_frac = _compute_frac(clipped_mask)
-        reject_frac = _compute_frac(rejected_mask)
-        clip_and_reject_frac = _compute_frac(clipped_mask & rejected_mask)
-        clip_or_reject_frac = _compute_frac(clipped_mask | rejected_mask)
-        # A sequence is rejected if NO token is kept (i.e., all final_mask == 0 for that seq)
-        seq_has_valid = original_valid.any(dim=-1)  # [B], bool: seq has >=1 valid token
-        seq_completely_rejected = (~keep_mask).all(dim=-1) & seq_has_valid  # [B]
-        total_valid_seqs = seq_has_valid.sum().item()
-        rejected_seqs = seq_completely_rejected.sum().item()
-        seq_reject_frac = rejected_seqs / total_valid_seqs if total_valid_seqs > 0 else 0.0
-        
-        ### kl metric
-        inferkl_orig = compute_approx_kl(
-            log_probs=infer_log_probs,
-            log_probs_base=old_log_probs,
-            action_mask=response_mask,   # ← original mask
-            kl_penalty="kl"
-        )
-        inferkl_final = compute_approx_kl(
-            log_probs=infer_log_probs,
-            log_probs_base=old_log_probs,
-            action_mask=final_mask,      # ← after rejection
-            kl_penalty="kl"
-        )
-        inferkl_orig_agg = agg_loss(
-            loss_mat=inferkl_orig,
-            loss_mask=response_mask,
-            loss_agg_mode=self.pipeline_config.loss_agg_mode
-        ).detach().item()
-        inferkl_final_agg = agg_loss(
-            loss_mat=inferkl_final,
-            loss_mask=final_mask,
-            loss_agg_mode=self.pipeline_config.loss_agg_mode
-        ).detach().item()
-        valid_raw_is_weight = raw_is_weight[original_valid]  # [N_valid_tokens,]
-        if valid_raw_is_weight.numel() > 0:
-            raw_is_mean = valid_raw_is_weight.mean().detach().item()
-            raw_is_std = valid_raw_is_weight.std(unbiased=False).detach().item() 
-            raw_is_min = valid_raw_is_weight.min().detach().item()
-            raw_is_max = valid_raw_is_weight.max().detach().item()
-        else:
-            # fallback if no valid tokens (rare edge case)
-            raw_is_mean = raw_is_std = raw_is_min = raw_is_max = 0.0
-        stats = {
-            "infer_correction/reject_frac": reject_frac,
-            "infer_correction/clip_frac": clip_frac,
-            "infer_correction/clip_and_reject_frac": clip_and_reject_frac,
-            "infer_correction/clip_or_reject_frac": clip_or_reject_frac,
-            "infer_correction/seq_reject_frac": seq_reject_frac, 
-            "infer_correction/inferkl_orig": inferkl_orig_agg,
-            "infer_correction/inferkl_final": inferkl_final_agg,
-            "infer_correction/raw_is_mean": raw_is_mean,
-            "infer_correction/raw_is_std": raw_is_std,
-            "infer_correction/raw_is_min": raw_is_min,
-            "infer_correction/raw_is_max": raw_is_max,
-        }
-        return pg_loss, final_mask, stats
+
     @register(dispatch_mode=Dispatch.ONE_TO_ALL)
     def do_checkpoint(self, global_step):
         with Timer("do_checkpoint") as total_timer:

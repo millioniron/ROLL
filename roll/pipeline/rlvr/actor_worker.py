@@ -4,6 +4,7 @@ import torch
 from roll.distributed.scheduler.protocol import DataProto
 from roll.pipeline.base_worker import ActorWorker as BaseActorWorker
 from roll.utils.functionals import masked_mean, agg_loss, compute_approx_kl
+from roll.utils.infer_correction import InferCorrectionHandler  
 
 
 class ActorWorker(BaseActorWorker):
@@ -20,7 +21,7 @@ class ActorWorker(BaseActorWorker):
         ref_log_probs = data.batch["ref_log_probs"]
         old_log_probs = data.batch["old_log_probs"]
         infer_log_probs = data.batch.get("infer_logprobs", None)
-
+        
         advantages = data.batch["advantages"]
 
         log_probs = self.strategy.op_compute_log_probs(
@@ -70,13 +71,21 @@ class ActorWorker(BaseActorWorker):
         if self.pipeline_config.dual_clip_loss:
             dual_clip_loss = -torch.max(-loss, (1 + self.pipeline_config.pg_clip * 2) * advantages)
             loss = torch.where(advantages < 0, dual_clip_loss, loss)
-        
-        if infer_log_probs is not None and self.pipeline_config.infer_correction:
-            loss, infer_response_mask, infer_stats=self.infer_correction(
-                old_log_probs=old_log_probs, infer_log_probs=infer_log_probs,
-                response_mask=response_mask,pg_loss=loss)
-            final_response_mask = (final_response_mask.bool() & infer_response_mask).long()
             
+        infer_stats = {}
+        if infer_log_probs is not None and self.pipeline_config.infer_correction:
+            correction_handler = InferCorrectionHandler(self.pipeline_config)
+            loss, infer_response_mask, infer_stats = correction_handler(
+                old_log_probs=old_log_probs,
+                infer_log_probs=infer_log_probs,
+                response_mask=response_mask,
+                pg_loss=loss
+            )
+            # 更新最终掩码
+            final_response_mask = (final_response_mask.bool() & infer_response_mask).long()
+
+
+       
         weighted_pg_loss = agg_loss(loss_mat=loss, loss_mask=final_response_mask,
                                     loss_agg_mode=self.pipeline_config.loss_agg_mode,
                                     weights=sample_weights, loss_scale=loss_scale)
@@ -124,6 +133,7 @@ class ActorWorker(BaseActorWorker):
             total_loss = total_loss + topr_neg_loss * self.pipeline_config.use_topr_neg_loss_coef
             metrics['actor/topr_neg_loss'] = topr_neg_loss.detach().item()
 
+        
         loss_metric = {
             "actor/ppo_ratio_high_clipfrac": clipped_high.mean().detach().item(),
             "actor/ppo_ratio_low_clipfrac": clipped_low.mean().detach().item(),
