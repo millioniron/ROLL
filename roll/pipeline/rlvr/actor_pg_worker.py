@@ -4,6 +4,7 @@ import torch
 from roll.distributed.scheduler.protocol import DataProto
 from roll.utils.functionals import masked_mean, agg_loss, compute_approx_kl
 from roll.pipeline.rlvr.actor_worker import ActorWorker
+from roll.utils.infer_correction import InferCorrectionHandler  
 
 class ActorPGWorker(ActorWorker):
 
@@ -30,10 +31,11 @@ class ActorPGWorker(ActorWorker):
         """
 
         response_mask = data.batch["response_mask"][:, 1:].long()
-        infer_log_probs = data.batch.get("infer_logprobs", None)
         final_response_mask = data.batch.get("final_response_mask", response_mask)
 
         ref_log_probs = data.batch["ref_log_probs"]
+        old_log_probs = data.batch["old_log_probs"]
+        infer_log_probs = data.batch.get("infer_logprobs", None)
         advantages = data.batch["advantages"]
 
         log_probs = self.strategy.op_compute_log_probs(
@@ -77,13 +79,19 @@ class ActorPGWorker(ActorWorker):
             pg_loss = self._compute_kimi15_loss(ratio, log_probs, old_log_probs, advantages)
         else:
             raise ValueError(f"Unsupported pg_variant: {pg_variant}")
-        
+
+        infer_stats = {}
         if infer_log_probs is not None and self.pipeline_config.infer_correction:
-            loss, infer_response_mask, infer_stats=self.infer_correction(
-                old_log_probs=old_log_probs, infer_log_probs=infer_log_probs,
-                response_mask=response_mask,pg_loss=loss)
+            correction_handler = InferCorrectionHandler(self.pipeline_config)
+            pg_loss, infer_response_mask, infer_stats = correction_handler(
+                old_log_probs=old_log_probs,
+                infer_log_probs=infer_log_probs,
+                response_mask=response_mask,
+                pg_loss=pg_loss
+            )
+            # 更新最终掩码
             final_response_mask = (final_response_mask.bool() & infer_response_mask).long()
-        
+             
         weighted_pg_loss = agg_loss(loss_mat=pg_loss, loss_mask=final_response_mask,
                                     loss_agg_mode=self.pipeline_config.loss_agg_mode, weights=sample_weights)
         original_pg_loss = agg_loss(loss_mat=pg_loss, loss_mask=final_response_mask,
@@ -134,7 +142,8 @@ class ActorPGWorker(ActorWorker):
 
         # 使用缓存的指标
         pg_metrics = self._get_pg_metrics(data)
-        pg_metrics.updata(infer_stats)
+        
+        pg_metrics.update(infer_stats)
 
         return total_loss, pg_metrics
 

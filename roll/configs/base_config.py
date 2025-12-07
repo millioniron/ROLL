@@ -407,9 +407,9 @@ class PPOConfig(BaseConfig):
         default=False,
         metadata={"help": "Whether to apply importance sampling correction during inference."}
     )
-    infer_is_mode: Literal["token", "sequence", "none"] = field(
-        default="token",
-        metadata={"help": "IS weighting mode: 'token' (per-token ratio), 'sequence' (per-sequence ratio), 'none' (no IS weighting)."}
+    infer_is_mode: Literal["token", "sequence", "None"] = field(
+        default="None",
+        metadata={"help": "IS weighting mode: 'token' (per-token ratio), 'sequence' (per-sequence ratio), 'None' (no IS weighting)."}
     )
     # Clipping thresholds (used in IS weighting)
     infer_is_threshold_min: float = field(

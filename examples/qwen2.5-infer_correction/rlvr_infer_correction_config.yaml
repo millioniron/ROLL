@@ -80,8 +80,8 @@ infer_is_threshold_min: 0.0
 infer_is_threshold_max: 2.0     # 1.5~5.0
 
 enable_token_reject: false
-infer_token_rs_threshold_min: 0.0
-infer_token_rs_threshold_max: 2.0 # 2~10
+infer_token_mask_threshold_min: 0.0
+infer_token_mask_threshold_max: 2.0 # 2~10
 
 enable_catastrophic_reject: false
 infer_catastrophic_threshold: 1e-4
@@ -89,12 +89,12 @@ infer_catastrophic_threshold: 1e-4
 enable_seq_reject: None
 
 # enable_seq_reject: sequence
-# infer_seq_rs_threshold_min: 0.1
-# infer_seq_rs_threshold_max: 10
+# infer_seq_mask_threshold_min: 0.1
+# infer_seq_mask_threshold_max: 10
 
 # enable_seq_reject: geometric
-# infer_seq_rs_threshold_min: 0.999
-# infer_seq_rs_threshold_max: 1.001
+# infer_seq_mask_threshold_min: 0.999
+# infer_seq_mask_threshold_max: 1.001
 
 validation:
   data_args:
