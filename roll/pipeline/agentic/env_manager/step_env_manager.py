@@ -79,6 +79,7 @@ class StepEnvManager(TrajEnvManager):
             input_ids =torch.tensor(token_ids, dtype=torch.long).unsqueeze(0)
             attention_mask = torch.tensor([1] * len(token_ids), dtype=torch.long).unsqueeze(0)
             response_mask = torch.tensor(response_masks, dtype=torch.bool).unsqueeze(0)
+            infer_logprobs=[]
             if "infer_logprobs" in history:
                 infer_logprobs = [0] * len(history["prompt_ids"]) + history["infer_logprobs"]
 
