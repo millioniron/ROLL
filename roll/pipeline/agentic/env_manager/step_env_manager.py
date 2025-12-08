@@ -79,7 +79,6 @@ class StepEnvManager(TrajEnvManager):
             input_ids =torch.tensor(token_ids, dtype=torch.long).unsqueeze(0)
             attention_mask = torch.tensor([1] * len(token_ids), dtype=torch.long).unsqueeze(0)
             response_mask = torch.tensor(response_masks, dtype=torch.bool).unsqueeze(0)
-            infer_logprobs = []
             if "infer_logprobs" in history:
                 infer_logprobs = [0] * len(history["prompt_ids"]) + history["infer_logprobs"]
 
@@ -88,7 +87,6 @@ class StepEnvManager(TrajEnvManager):
             prompt_mask = torch.tensor(prompt_masks, dtype=torch.bool).unsqueeze(0)
             score_tensor = torch.tensor([0] * len(token_ids), dtype=torch.float).unsqueeze(0)
             score_tensor[0][-1] = history['reward']
-            infer_logprobs = history["infer_logprobs"].flatten().unsqueeze(0)
             position_ids = attention_mask.cumsum(dim=-1)
 
             input_ids = pad_to_length(input_ids, length=self.pipeline_config.sequence_length, pad_value=self.tokenizer.pad_token_id)
@@ -106,7 +104,6 @@ class StepEnvManager(TrajEnvManager):
                         "response_mask": response_mask,
                         "prompt_mask": prompt_mask,
                         "scores": score_tensor,
-                        "infer_logprobs": infer_logprobs,
                     },
                     batch_size=input_ids.shape[0]),
                 non_tensor_batch={
