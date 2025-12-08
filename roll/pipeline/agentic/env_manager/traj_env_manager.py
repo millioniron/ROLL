@@ -308,7 +308,6 @@ class TrajEnvManager(BaseEnvManager):
                 infer_logprobs.extend([0] * len(items["prompt_ids"]) + items["infer_logprobs"])
 
         input_ids =torch.tensor(token_ids, dtype=torch.long).unsqueeze(0)
-        infer_logprobs = torch.tensor(infer_logprobs, dtype=torch.float).unsqueeze(0)
         attention_mask = torch.tensor([1] * len(token_ids), dtype=torch.long).unsqueeze(0)
         response_mask = torch.tensor(response_masks, dtype=torch.bool).unsqueeze(0)
 
